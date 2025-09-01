@@ -11,7 +11,7 @@ import MDAnalysis
 from utils.PeptideBuilder import get_edges_from_sequence
 import re
 from Bio.PDB import PDBParser
-
+import numpy as np
 
 def standard_residue_sort(item):
     # convert to str
@@ -130,46 +130,6 @@ def read_pdb_with_seq(pdbfile: str, sanitize: bool = True, addHs: bool = False):
     mol = Chem.MolFromPDBFile(pdbfile, sanitize=False)
 
     rw_mol = Chem.RWMol(mol)
-    while rw_mol.GetNumBonds() > 0:
-        bond = rw_mol.GetBondWithIdx(0)
-        rw_mol.RemoveBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
-
-    u = MDAnalysis.Universe(pdbfile)
-    trans = {}
-    seq = []
-    for res_idx, residue in enumerate(u.residues):
-        res_name = residue.resname.strip()
-        seq.append(
-            three_to_one[res_name]
-            if res_name in three_to_one.keys()
-            else f"[{res_name}]"
-        )
-        trans[
-            (
-                int(residue.resid)
-                if residue.icode == ""
-                else f"{residue.resid}{residue.icode.strip()}"
-            )
-        ] = res_idx
-    real_idx = [
-        trans[idx] for idx in sorted(set(trans.keys()), key=standard_residue_sort)
-    ]
-    seq = [seq[i] for i in real_idx]
-    seq = "".join(seq)
-    oxt = len(u.atoms.select_atoms("name OXT")) == 1
-    edges = get_edges_from_sequence(seq, oxt).tolist()
-
-    for edge in edges:
-        atom1_idx, atom2_idx, bond_type = edge
-        if bond_type == 1:
-            rw_mol.AddBond(atom1_idx - 1, atom2_idx - 1, Chem.BondType.SINGLE)
-        elif bond_type == 2:
-            rw_mol.AddBond(atom1_idx - 1, atom2_idx - 1, Chem.BondType.DOUBLE)
-        elif bond_type == 3:
-            rw_mol.AddBond(atom1_idx - 1, atom2_idx - 1, Chem.BondType.TRIPLE)
-        else:
-            raise RuntimeError
-
     if sanitize:
         Chem.SanitizeMol(rw_mol)
 
@@ -177,7 +137,6 @@ def read_pdb_with_seq(pdbfile: str, sanitize: bool = True, addHs: bool = False):
         mol = Chem.AddHs(rw_mol, addCoords=True)
     else:
         mol = rw_mol
-
     return mol
 
 

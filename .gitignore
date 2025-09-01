@@ -1,0 +1,5 @@
+.*.npy
+.vscode/
+results/
+outputs/
+__pycache__/

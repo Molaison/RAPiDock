@@ -9,11 +9,63 @@ import copy
 import torch
 import numpy as np
 from scipy.spatial.transform import Rotation
-from utils.geometry import kabsch_torch, axis_angle_to_matrix
+# from utils.geometry import kabsch_torch, axis_angle_to_matrix
+
+def axis_angle_to_matrix_torch(axis_angle: torch.Tensor):
+    # axis_angle: (3,) or (N, 3)
+    if axis_angle.dim() == 1:
+        angle = torch.norm(axis_angle)
+        if angle < 1e-6:
+            return torch.eye(3)
+        axis = axis_angle / angle
+        cos = torch.cos(angle)
+        sin = torch.sin(angle)
+        ux, uy, uz = axis
+        R = torch.tensor([
+            [cos + ux * ux * (1 - cos), ux * uy * (1 - cos) - uz * sin, ux * uz * (1 - cos) + uy * sin],
+            [uy * ux * (1 - cos) + uz * sin, cos + uy * uy * (1 - cos), uy * uz * (1 - cos) - ux * sin],
+            [uz * ux * (1 - cos) - uy * sin, uz * uy * (1 - cos) + ux * sin, cos + uz * uz * (1 - cos)]
+        ])
+        return R
+    elif axis_angle.dim() == 2:
+        R_list = []
+        for i in range(axis_angle.size(0)):
+            R_list.append(axis_angle_to_matrix_torch(axis_angle[i]))
+        return torch.stack(R_list, dim=0)
+    else:
+        raise ValueError("axis_angle must be of shape (3,) or (N, 3)")
+
+def kabsch_torch( P,Q):
+    # P, Q: (3, N)
+    assert P.shape[0] == 3 and Q.shape[0] == 3
+    assert P.shape[1] == Q.shape[1]
+    
+    # center the points
+    P_centered = P - P.mean(dim=1, keepdim=True)
+    Q_centered = Q - Q.mean(dim=1, keepdim=True)
+    
+    # covariance matrix (注意顺序)
+    C = Q_centered @ P_centered.T
+    
+    # SVD (使用新的API)
+    U, S, Vt = torch.linalg.svd(C)
+    
+    # 确保proper rotation (det(R) = 1)
+    d = torch.det(U @ Vt)
+    if d < 0:
+        Vt[-1, :] *= -1
+    
+    # rotation matrix
+    R = U @ Vt
+    
+    # translation
+    t = Q.mean(dim=1) - R @ P.mean(dim=1)
+    
+    return R, t
 
 def peptide_updater(data, tr_update, rot_update, torsion_backbone_updates, torsion_sidechain_updates):
     pep_a_center = torch.mean(data['pep_a'].pos, dim=0, keepdim=True)
-    rot_mat = axis_angle_to_matrix(rot_update.squeeze())
+    rot_mat = axis_angle_to_matrix_torch(rot_update.squeeze())
     rigid_new_pos = (data['pep_a'].pos - pep_a_center) @ rot_mat.T + tr_update + pep_a_center
     # select edges to modify (torsion angles only)
     edge_index = data["pep_a", "pep_a"].edge_index

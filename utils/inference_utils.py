@@ -19,8 +19,8 @@ from esm import FastaBatchedDataset, pretrained
 from utils.dataset_utils import three_to_one, standard_residue_sort, get_sequences
 from dataset.protein_feature import get_protein_feature_mda
 from dataset.peptide_feature import get_ori_peptide_feature_mda
-from utils.PeptideBuilder import make_structure_from_sequence
-
+# from utils.PeptideBuilder import make_structure_from_sequence
+import PeptideBuilder
 def set_nones(l):
     return [s if str(s) != 'nan' else None for s in l]
 
@@ -208,7 +208,7 @@ class InferenceDataset(Dataset):
             for t in p_dict:
                 assert p_dict[t] >= 0
                 if p_dict[t] != 0:
-                    structure = make_structure_from_sequence(seq,phi=[Dihedral_angle[t][0]]*(len(seq)-1),psi_im1=[Dihedral_angle[t][1]]*(len(seq)-1),oxt=oxt)
+                    structure = PeptideBuilder.make_structure(seq,phi=[Dihedral_angle[t][0]]*(len(seq)-1),psi_im1=[Dihedral_angle[t][1]]*(len(seq)-1))
                     out = Bio.PDB.PDBIO()
                     out.set_structure(structure)
                     peptide_init = os.path.join(f"{self.output_dir}/{name}",f'{name}_peptide_{t}.pdb')
@@ -217,7 +217,7 @@ class InferenceDataset(Dataset):
                     partials.append(p_dict[t])
         else:
             t = {'H':'Helical','E':'Extended','P':'Polyproline'}[self.conformation_type]
-            structure = make_structure_from_sequence(seq,phi=[Dihedral_angle[t][0]]*(len(seq)-1),psi_im1=[Dihedral_angle[t][1]]*(len(seq)-1),oxt=oxt)
+            structure = PeptideBuilder.make_structure(seq,phi=[Dihedral_angle[t][0]]*(len(seq)-1),psi_im1=[Dihedral_angle[t][1]]*(len(seq)-1))
             out = Bio.PDB.PDBIO()
             out.set_structure(structure)
             peptide_init = os.path.join(f"{self.output_dir}/{name}",f'{name}_peptide_{t}.pdb')

@@ -517,7 +517,12 @@ def get_ori_peptide_feature_mda(peptide_file, lm_embedding_chains=None, match = 
         
     seq_str = ''.join([three_to_one[res_name] if res_name in three_to_one.keys() else f'[{res_name}]' for res_name in peptide_mol.residues.resnames])
     oxt = len(peptide_mol.atoms.select_atoms('name OXT')) == 1
-    all_edge_index = (get_edges_from_sequence(seq_str, oxt=oxt)[:,:2] -1)
+    # all_edge_index = (get_edges_from_sequence(seq_str, oxt=oxt)[:,:2] -1)
+    mol = Chem.MolFromPDBFile(peptide_file, sanitize=False)
+
+    rw_mol = Chem.RWMol(mol)
+
+    all_edge_index = np.array(list([(bond.GetEndAtomIdx(),bond.GetBeginAtomIdx()) for bond in rw_mol.GetBonds()])).reshape(-1,2)
     all_edge_index = np.concatenate([all_edge_index,all_edge_index[:,[1,0]]],axis=-1).reshape(-1,2)
     
     with torch.no_grad():
