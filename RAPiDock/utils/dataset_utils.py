@@ -8,7 +8,7 @@
 
 from rdkit import Chem
 import MDAnalysis
-from utils.PeptideBuilder import get_edges_from_sequence
+# from utils.PeptideBuilder import get_edges_from_sequence
 import re
 from Bio.PDB import PDBParser
 import numpy as np

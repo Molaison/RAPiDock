@@ -8,8 +8,8 @@
 import torch
 import numpy as np
 from torch_geometric.loader import DataLoader
-from utils.diffusion_utils import get_t_schedule, set_time, NoiseSchedule
-from utils.peptide_updater import peptide_updater
+from RAPiDock.utils.diffusion_utils import get_t_schedule, set_time, NoiseSchedule
+from RAPiDock.utils.peptide_updater import peptide_updater
 
 def sampling(data_list, model, args, inference_steps =20,
              no_random=False, ode=False, visualization_list=None, confidence_model=None, batch_size=32, no_final_step_noise=False, actual_steps=None):

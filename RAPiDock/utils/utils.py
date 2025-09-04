@@ -9,7 +9,7 @@ import os
 import yaml
 import torch
 from torch_geometric.nn.data_parallel import DataParallel
-from models.model import ConfidenceModel, ScoreModel
+from RAPiDock.models.model import ConfidenceModel, ScoreModel
 
 
 def save_yaml_file(path, content):

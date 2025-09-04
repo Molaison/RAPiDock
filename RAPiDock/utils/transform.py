@@ -8,10 +8,10 @@
 import torch
 import numpy as np
 from torch_geometric.transforms import BaseTransform
-from utils.so3 import sample_vec, score_vec
-from utils.torus import score as score_torus
-from utils.peptide_updater import peptide_updater
-from utils.diffusion_utils import set_time, NoiseSchedule
+from RAPiDock.utils.so3 import sample_vec, score_vec
+from RAPiDock.utils.torus import score as score_torus
+from RAPiDock.utils.peptide_updater import peptide_updater
+from RAPiDock.utils.diffusion_utils import set_time, NoiseSchedule
 
 class NoiseTransform(BaseTransform):
     """

@@ -9,11 +9,10 @@ import math
 import numpy as np
 import torch
 from torch_scatter import scatter_max,scatter_min
-from utils.PeptideBuilder import get_edges_from_sequence
 import torch.nn.functional as F
 import torch_cluster
 from MDAnalysis.analysis import distances
-from utils.dataset_utils import read_pdb_with_seq, three_to_one, standard_residue_sort
+from RAPiDock.utils.dataset_utils import read_pdb_with_seq, three_to_one, standard_residue_sort
 from io import StringIO
 import MDAnalysis
 from rdkit.Chem import AllChem, RemoveHs
@@ -411,7 +410,7 @@ def read_mols(pdbbind_dir, name, remove_hs=False,sanitize=False):
     return lig
 
 def find_sidechain_bonds(pep_noh,coords,backbone_edge_index):
-    mol = read_mols('.',pep_noh, remove_hs=False)
+    mol = read_mols('', pep_noh, remove_hs=False)
     mol_maybe_noh = RemoveHs(mol, sanitize=True)
     assert np.sum(~(mol_maybe_noh.GetConformer().GetPositions().astype(np.float32) == np.asarray(coords))) == 0
     row, col = [], []

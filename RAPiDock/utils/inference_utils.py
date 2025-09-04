@@ -16,9 +16,9 @@ from torch_geometric.utils import to_networkx
 import networkx as nx
 import numpy as np
 from esm import FastaBatchedDataset, pretrained
-from utils.dataset_utils import three_to_one, standard_residue_sort, get_sequences
-from dataset.protein_feature import get_protein_feature_mda
-from dataset.peptide_feature import get_ori_peptide_feature_mda
+from RAPiDock.utils.dataset_utils import three_to_one, standard_residue_sort, get_sequences
+from RAPiDock.dataset.protein_feature import get_protein_feature_mda
+from RAPiDock.dataset.peptide_feature import get_ori_peptide_feature_mda
 # from utils.PeptideBuilder import make_structure_from_sequence
 import PeptideBuilder
 def set_nones(l):

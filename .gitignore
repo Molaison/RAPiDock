@@ -4,7 +4,10 @@ results/
 outputs/
 __pycache__/
 train_models/
-dataset/__pycache__
-models/__pycache__
+RAPiDock/dataset/__pycache__
+RAPiDock/models/__pycache__
 *.cif
 *.pdb
+build/
+*.egg-info/
+.idea/

@@ -7,7 +7,6 @@
 
 ## added by huifeng, 20231010
 
-import os
 import math
 import numpy as np
 import torch
@@ -16,7 +15,7 @@ import torch_cluster
 import MDAnalysis
 from scipy.spatial import distance_matrix
 from MDAnalysis.analysis import distances
-from utils.dataset_utils import standard_residue_sort
+from RAPiDock.utils.dataset_utils import standard_residue_sort
 
 three2idx = {
     k: v

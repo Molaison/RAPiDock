@@ -13,11 +13,11 @@ from torch_cluster import radius
 from torch_scatter import scatter, scatter_mean
 from e3nn import o3
 from e3nn.nn import BatchNorm
-from utils.diffusion_utils import get_timestep_embedding
-from utils.transform import NoiseSchedule
-from utils.so3 import score_norm
-from utils.torus import score_norm as torus_score
-from dataset.peptide_feature import three2idx, allowable_features, atomname2idx, get_updated_peptide_feature
+from RAPiDock.utils.diffusion_utils import get_timestep_embedding
+from RAPiDock.utils.transform import NoiseSchedule
+from RAPiDock.utils.so3 import score_norm
+from RAPiDock.utils.torus import score_norm as torus_score
+from RAPiDock.dataset.peptide_feature import three2idx, allowable_features, atomname2idx, get_updated_peptide_feature
 
 feature_dims = [
             len(three2idx), max([len(res) for res in atomname2idx]) # Amino_idx_dim/ Atom_idx_dim

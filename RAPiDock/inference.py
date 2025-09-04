@@ -19,11 +19,11 @@ from io import StringIO
 from argparse import Namespace
 from MDAnalysis.coordinates.memory import MemoryReader
 from torch_geometric.loader import DataListLoader
-from utils.inference_parsing import get_parser
-from utils.utils import get_model, ExponentialMovingAverage
-from utils.inference_utils import InferenceDataset, set_nones
-from utils.peptide_updater import randomize_position
-from utils.sampling import sampling
+from RAPiDock.utils.inference_parsing import get_parser
+from RAPiDock.utils.utils import get_model, ExponentialMovingAverage
+from RAPiDock.utils.inference_utils import InferenceDataset, set_nones
+from RAPiDock.utils.peptide_updater import randomize_position
+from RAPiDock.utils.sampling import sampling
 import multiprocessing
 
 warnings.filterwarnings("ignore")
@@ -130,7 +130,7 @@ def save_predictions(write_dir, predict_pos, original_complex_graph, args, confi
         raw_pdb.atoms.write(peptide_unrelaxed_file)
 
     if args.scoring_function == "ref2015" or args.fastrelax:
-        from utils.pyrosetta_utils import relax_score
+        from RAPiDock.utils.pyrosetta_utils import relax_score
         relaxed_poses = [peptide.replace(".pdb", "_relaxed.pdb") for peptide in peptide_unrelaxed_files]
         protein_raw_file = f"{write_dir}/{os.path.basename(write_dir)}_protein_raw.pdb"
 
