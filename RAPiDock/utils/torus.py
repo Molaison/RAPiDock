@@ -7,7 +7,8 @@ import os
 import tqdm
 
 import numpy as np
-
+import sys
+SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 
 def p(x, sigma, N=10):
     p_ = 0
@@ -33,17 +34,17 @@ SIGMA_MIN, SIGMA_MAX, SIGMA_N = 3e-3, 2, 5000  # relative to pi
 x = 10 ** np.linspace(np.log10(X_MIN), 0, X_N + 1) * np.pi
 sigma = 10 ** np.linspace(np.log10(SIGMA_MIN), np.log10(SIGMA_MAX), SIGMA_N + 1) * np.pi
 
-if os.path.exists(".p.npy"):
-    p_ = np.load(".p.npy")
-    score_ = np.load(".score.npy")
+if os.path.exists(f"{SCRIPT_PATH}/.p.npy"):
+    p_ = np.load(f"{SCRIPT_PATH}/.p.npy")
+    score_ = np.load(f"{SCRIPT_PATH}/.score.npy")
 else:
     print('Computing .p.npy...', flush=True)
     p_ = p(x, sigma[:, None], N=100)
-    np.save(".p.npy", p_)
+    np.save(f"{SCRIPT_PATH}/.p.npy", p_)
 
     print('Computing .score.npy...', flush=True) 
     score_ = grad(x, sigma[:, None], N=100) / p_
-    np.save(".score.npy", score_)
+    np.save(f"{SCRIPT_PATH}/.score.npy", score_)
 
 
 def score(x, sigma):

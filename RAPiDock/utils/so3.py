@@ -7,7 +7,8 @@ import os
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation
-
+import sys
+SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
 MIN_EPS, MAX_EPS, N_EPS = 0.01, 2, 1000
 X_N = 2000
 
@@ -59,11 +60,11 @@ def _score(exp, omega, eps, L=2000):  # score of density over SO(3)
     return dSigma / exp
 
 
-if os.path.exists(".so3_omegas_array2.npy"):
-    _omegas_array = np.load(".so3_omegas_array2.npy")
-    _cdf_vals = np.load(".so3_cdf_vals2.npy")
-    _score_norms = np.load(".so3_score_norms2.npy")
-    _exp_score_norms = np.load(".so3_exp_score_norms2.npy")
+if os.path.exists(f"{SCRIPT_PATH}/.so3_omegas_array2.npy"):
+    _omegas_array = np.load(f"{SCRIPT_PATH}/.so3_omegas_array2.npy")
+    _cdf_vals = np.load(f"{SCRIPT_PATH}/.so3_cdf_vals2.npy")
+    _score_norms = np.load(f"{SCRIPT_PATH}/.so3_score_norms2.npy")
+    _exp_score_norms = np.load(f"{SCRIPT_PATH}/.so3_exp_score_norms2.npy")
 else:
     print('RAPiDock will computing the neccessary so3 params for the first running. It will take a few minutes.', flush=True)
     _eps_array = 10 ** np.linspace(np.log10(MIN_EPS), np.log10(MAX_EPS), N_EPS)
@@ -91,10 +92,10 @@ else:
         / np.pi
     )
 
-    np.save(".so3_omegas_array2.npy", _omegas_array)
-    np.save(".so3_cdf_vals2.npy", _cdf_vals)
-    np.save(".so3_score_norms2.npy", _score_norms)
-    np.save(".so3_exp_score_norms2.npy", _exp_score_norms)
+    np.save(f"{SCRIPT_PATH}/.so3_omegas_array2.npy", _omegas_array)
+    np.save(f"{SCRIPT_PATH}/.so3_cdf_vals2.npy", _cdf_vals)
+    np.save(f"{SCRIPT_PATH}/.so3_score_norms2.npy", _score_norms)
+    np.save(f"{SCRIPT_PATH}/.so3_exp_score_norms2.npy", _exp_score_norms)
 
 
 def sample(eps):
