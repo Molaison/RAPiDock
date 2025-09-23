@@ -7,6 +7,7 @@
 
 
 import os
+import re
 import esm
 import MDAnalysis
 import torch
@@ -16,19 +17,130 @@ from torch_geometric.utils import to_networkx
 import networkx as nx
 import numpy as np
 from esm import FastaBatchedDataset, pretrained
-from RAPiDock.utils.dataset_utils import three_to_one, standard_residue_sort, get_sequences
+from RAPiDock.utils.dataset_utils import (
+    three_to_one,
+    standard_residue_sort,
+    get_sequences,
+)
 from RAPiDock.dataset.protein_feature import get_protein_feature_mda
 from RAPiDock.dataset.peptide_feature import get_ori_peptide_feature_mda
+
 # from utils.PeptideBuilder import make_structure_from_sequence
 import PeptideBuilder
+
+
 def set_nones(l):
-    return [s if str(s) != 'nan' else None for s in l]
+    return [s if str(s) != "nan" else None for s in l]
+
 
 Dihedral_angle = {
-    'Helical' : [-57,-47],
-    'Extended' : [-139,135],
-    'Polyproline' : [-78,149]
+    "Helical": [-57, -47],
+    "Extended": [-139, 135],
+    "Polyproline": [-78, 149],
 }
+
+import sys
+import numpy as np
+import copy
+from Bio.PDB import PDBParser, PDBIO
+
+BACKBONE_NAMES = ("N", "CA", "C")
+
+
+def align_residues_by_backbone(helix_pdb, af3_pdb, out_pdb):
+    """
+    主要函数：将AF3结构中的残基按骨架原子对齐到helix结构
+
+    Args:
+        helix_pdb: 目标helix结构文件路径
+        af3_pdb: 源AF3结构文件路径
+        out_pdb: 输出对齐后结构文件路径
+    """
+    # 解析结构
+    parser = PDBParser(QUIET=True)
+    helix_struct = parser.get_structure("HELIX", helix_pdb)
+    af3_struct = parser.get_structure("AF3", af3_pdb)
+
+    # 提取残基列表
+    def get_residues(structure):
+        model = next(structure.get_models())
+        residues = []
+        for chain in model:
+            for res in chain:
+                if res.id[0].strip() == "":  # skip hetatms
+                    residues.append(res)
+        return residues
+
+    helix_res = get_residues(helix_struct)
+    af3_res = get_residues(af3_struct)
+
+    if len(helix_res) != len(af3_res):
+        print(
+            f"Warning: helix ({len(helix_res)}) and af3 ({len(af3_res)}) residue counts differ."
+        )
+
+    n = min(len(helix_res), len(af3_res))
+    print(f"Aligning {n} residues (index 0..{n-1}).")
+
+    # 创建输出结构的深拷贝
+    out_struct = copy.deepcopy(af3_struct)
+    out_residues = get_residues(out_struct)
+
+    skipped = 0
+    for i in range(n):
+        hres = helix_res[i]
+        ares = out_residues[i]
+
+        # 获取并检查骨架原子
+        def get_backbone_coords(residue):
+            coords = {}
+            for name in BACKBONE_NAMES:
+                if name in residue:
+                    coords[name] = residue[name].get_coord()
+                else:
+                    return None
+            return coords
+
+        helix_backbone = get_backbone_coords(hres)
+        af3_backbone = get_backbone_coords(ares)
+
+        if helix_backbone is None or af3_backbone is None:
+            print(f"Residue {i}: missing backbone atoms, skipping.")
+            skipped += 1
+            continue
+
+        # 计算变换矩阵：从AF3骨架到helix骨架
+        old_coords = np.array([af3_backbone[name] for name in BACKBONE_NAMES])
+        new_coords = np.array([helix_backbone[name] for name in BACKBONE_NAMES])
+
+        # 以CA为中心计算旋转
+        old_ca, new_ca = old_coords[1], new_coords[1]
+        old_centered = old_coords - old_ca
+        new_centered = new_coords - new_ca
+
+        # SVD计算最优旋转矩阵
+        H = old_centered.T @ new_centered
+        U, S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+
+        # 确保右手系
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+
+        t = new_ca - R @ old_ca
+
+        # 对整个残基的所有原子应用变换
+        for atom in ares.get_atoms():
+            old_coord = atom.get_coord()
+            new_coord = (R @ old_coord) + t
+            atom.set_coord(new_coord)
+
+    # 保存结果
+    io = PDBIO()
+    io.set_structure(out_struct)
+    io.save(out_pdb)
+
 
 def compute_ESM_embeddings(model, alphabet, labels, sequences):
     # settings used
@@ -39,26 +151,35 @@ def compute_ESM_embeddings(model, alphabet, labels, sequences):
     dataset = FastaBatchedDataset(labels, sequences)
     batches = dataset.get_batch_indices(toks_per_batch, extra_toks_per_seq=1)
     data_loader = torch.utils.data.DataLoader(
-        dataset, collate_fn=alphabet.get_batch_converter(truncation_seq_length), batch_sampler=batches
+        dataset,
+        collate_fn=alphabet.get_batch_converter(truncation_seq_length),
+        batch_sampler=batches,
     )
 
     assert all(-(model.num_layers + 1) <= i <= model.num_layers for i in repr_layers)
-    repr_layers = [(i + model.num_layers + 1) % (model.num_layers + 1) for i in repr_layers]
+    repr_layers = [
+        (i + model.num_layers + 1) % (model.num_layers + 1) for i in repr_layers
+    ]
     embeddings = {}
 
     with torch.no_grad():
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
-            print(f"Processing {batch_idx + 1} of {len(batches)} batches ({toks.size(0)} sequences)")
+            print(
+                f"Processing {batch_idx + 1} of {len(batches)} batches ({toks.size(0)} sequences)"
+            )
             if torch.cuda.is_available():
                 toks = toks.to(device="cuda", non_blocking=True)
 
             out = model(toks, repr_layers=repr_layers, return_contacts=False)
-            representations = {layer: t.to(device="cpu") for layer, t in out["representations"].items()}
+            representations = {
+                layer: t.to(device="cpu") for layer, t in out["representations"].items()
+            }
 
             for i, label in enumerate(labels):
                 truncate_len = min(truncation_seq_length, len(strs[i]))
-                embeddings[label] = representations[33][i, 1: truncate_len + 1].clone()
+                embeddings[label] = representations[33][i, 1 : truncate_len + 1].clone()
     return embeddings
+
 
 def generate_ESM_structure(model, filename, sequence):
     model.set_chunk_size(256)
@@ -74,8 +195,8 @@ def generate_ESM_structure(model, filename, sequence):
                 f.write(output)
                 print("saved", filename)
         except RuntimeError as e:
-            if 'out of memory' in str(e):
-                print('| WARNING: ran out of memory on chunk_size', chunk_size)
+            if "out of memory" in str(e):
+                print("| WARNING: ran out of memory on chunk_size", chunk_size)
                 for p in model.parameters():
                     if p.grad is not None:
                         del p.grad  # free some memory
@@ -90,8 +211,20 @@ def generate_ESM_structure(model, filename, sequence):
                 raise e
     return output is not None
 
+
 class InferenceDataset(Dataset):
-    def __init__(self, output_dir, complex_name_list, protein_description_list, peptide_description_list, lm_embeddings, lm_embeddings_pep, precomputed_lm_embeddings=None, conformation_type=None, conformation_partial=None):
+    def __init__(
+        self,
+        output_dir,
+        complex_name_list,
+        protein_description_list,
+        peptide_description_list,
+        lm_embeddings,
+        lm_embeddings_pep,
+        precomputed_lm_embeddings=None,
+        conformation_type=None,
+        conformation_partial=None,
+    ):
 
         super(InferenceDataset, self).__init__()
 
@@ -101,10 +234,12 @@ class InferenceDataset(Dataset):
         self.peptide_descriptions = peptide_description_list
         self.conformation_type = conformation_type
         self.conformation_partial = conformation_partial
-        
+
         model = None
         # generate LM embeddings for protein
-        if lm_embeddings and (precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None):
+        if lm_embeddings and (
+            precomputed_lm_embeddings is None or precomputed_lm_embeddings[0] is None
+        ):
             print("Generating ESM language model embeddings for protein")
             model_location = "esm2_t33_650M_UR50D"
             model, alphabet = pretrained.load_model_and_alphabet(model_location)
@@ -115,23 +250,33 @@ class InferenceDataset(Dataset):
             protein_sequences = get_sequences(protein_description_list)
             labels, sequences = [], []
             for i in range(len(protein_sequences)):
-                s = protein_sequences[i].split(':')
+                s = protein_sequences[i].split(":")
                 sequences.extend(s)
-                labels.extend([str(complex_name_list[i]) + '_chain_' + str(j) for j in range(len(s))])
+                labels.extend(
+                    [
+                        str(complex_name_list[i]) + "_chain_" + str(j)
+                        for j in range(len(s))
+                    ]
+                )
 
             lm_embeddings = compute_ESM_embeddings(model, alphabet, labels, sequences)
 
             self.lm_embeddings = []
             for i in range(len(protein_sequences)):
-                s = protein_sequences[i].split(':')
-                self.lm_embeddings.append([lm_embeddings[f'{complex_name_list[i]}_chain_{j}'] for j in range(len(s))])
-            
+                s = protein_sequences[i].split(":")
+                self.lm_embeddings.append(
+                    [
+                        lm_embeddings[f"{complex_name_list[i]}_chain_{j}"]
+                        for j in range(len(s))
+                    ]
+                )
+
         elif not lm_embeddings:
             self.lm_embeddings = [None] * len(self.complex_names)
-        
+
         else:
             self.lm_embeddings = precomputed_lm_embeddings
-        
+
         # generate LM embeddings for peptide
         if lm_embeddings_pep:
             print("Generating ESM language model embeddings for peptide")
@@ -145,112 +290,207 @@ class InferenceDataset(Dataset):
             peptide_sequences = get_sequences(peptide_description_list)
             labels, sequences = [], []
             for i in range(len(peptide_sequences)):
-                s = peptide_sequences[i].split(':')
+                s = peptide_sequences[i].split(":")
                 sequences.extend(s)
-                labels.extend([str(complex_name_list[i]) + '_chain_' + str(j) for j in range(len(s))])
-                
-            lm_embeddings_pep = compute_ESM_embeddings(model, alphabet, labels, sequences)
-            
+                labels.extend(
+                    [
+                        str(complex_name_list[i]) + "_chain_" + str(j)
+                        for j in range(len(s))
+                    ]
+                )
+
+            lm_embeddings_pep = compute_ESM_embeddings(
+                model, alphabet, labels, sequences
+            )
+
             self.lm_embeddings_pep = []
             for i in range(len(peptide_sequences)):
-                s = peptide_sequences[i].split(':')
-                self.lm_embeddings_pep.append([lm_embeddings_pep[f'{complex_name_list[i]}_chain_{j}'] for j in range(len(s))])
-        
+                s = peptide_sequences[i].split(":")
+                self.lm_embeddings_pep.append(
+                    [
+                        lm_embeddings_pep[f"{complex_name_list[i]}_chain_{j}"]
+                        for j in range(len(s))
+                    ]
+                )
+
         else:
             self.lm_embeddings_pep = [None] * len(self.complex_names)
-            
+
         # generate protein structures with ESMFold if only protein sequences are provided
-        protein_structure_missing = len([protein_description for protein_description in protein_description_list if 'pdb' not in protein_description]) > 0
+        protein_structure_missing = (
+            len(
+                [
+                    protein_description
+                    for protein_description in protein_description_list
+                    if "pdb" not in protein_description
+                ]
+            )
+            > 0
+        )
         if protein_structure_missing:
             print("generating missing protein structures with ESMFold")
             model = esm.pretrained.esmfold_v1()
             model = model.eval().cuda()
-            
+
             for i in range(len(protein_description_list)):
-                if 'pdb' not in protein_description_list[i]:
-                    self.protein_descriptions[i] = f"{output_dir}/{complex_name_list[i]}/{complex_name_list[i]}_esmfold.pdb"
+                if "pdb" not in protein_description_list[i]:
+                    self.protein_descriptions[i] = (
+                        f"{output_dir}/{complex_name_list[i]}/{complex_name_list[i]}_esmfold.pdb"
+                    )
                     if not os.path.exists(self.protein_descriptions[i]):
                         print("generating", self.protein_descriptions[i])
-                        generate_ESM_structure(model, self.protein_descriptions[i], protein_description_list[i])
-    
+                        generate_ESM_structure(
+                            model,
+                            self.protein_descriptions[i],
+                            protein_description_list[i],
+                        )
+
     def len(self):
         return len(self.complex_names)
-    
+
     def get(self, idx):
-        name, protein_file, peptide_description, lm_embedding, lm_embedding_pep = self.complex_names[idx], self.protein_descriptions[idx], self.peptide_descriptions[idx], self.lm_embeddings[idx], self.lm_embeddings_pep[idx]
-        os.system(f'cp {protein_file} {self.output_dir}/{name}/{name}_protein_raw.pdb')
+        name, protein_file, peptide_description, lm_embedding, lm_embedding_pep = (
+            self.complex_names[idx],
+            self.protein_descriptions[idx],
+            self.peptide_descriptions[idx],
+            self.lm_embeddings[idx],
+            self.lm_embeddings_pep[idx],
+        )
+        os.system(f"cp {protein_file} {self.output_dir}/{name}/{name}_protein_raw.pdb")
         # build the pytorch geometric heterogeneous graph
-        c_alpha_coords_rec, tip_coords_rec, lm_embeddings_rec, seq_rec, node_s_rec, node_v_rec, edge_index_rec, edge_s_rec, edge_v_rec = get_protein_feature_mda(protein_file, lm_embedding_chains=lm_embedding)
-        
+        (
+            c_alpha_coords_rec,
+            tip_coords_rec,
+            lm_embeddings_rec,
+            seq_rec,
+            node_s_rec,
+            node_v_rec,
+            edge_index_rec,
+            edge_s_rec,
+            edge_v_rec,
+        ) = get_protein_feature_mda(protein_file, lm_embedding_chains=lm_embedding)
+
         # build the initial peptide, either from file or seq
-        if 'pdb' in peptide_description:
-            os.system(f'cp {peptide_description} {self.output_dir}/{name}/{name}_peptide_raw.pdb')
+        if "pdb" in peptide_description:
+            os.system(
+                f"cp {peptide_description} {self.output_dir}/{name}/{name}_peptide_raw.pdb"
+            )
             u = MDAnalysis.Universe(peptide_description)
             trans = {}
             seq = []
             for res_idx, residue in enumerate(u.residues):
                 res_name = residue.resname.strip()
-                seq.append(three_to_one[res_name] if res_name in three_to_one.keys() else f'[{res_name}]')
-                trans[int(residue.resid) if residue.icode == '' else f"{residue.resid}{residue.icode.strip()}"] = res_idx
-            real_idx = [trans[idx] for idx in sorted(set(trans.keys()),key=standard_residue_sort)]
+                seq.append(
+                    three_to_one[res_name]
+                    if res_name in three_to_one.keys()
+                    else f"[{res_name}]"
+                )
+                trans[
+                    (
+                        int(residue.resid)
+                        if residue.icode == ""
+                        else f"{residue.resid}{residue.icode.strip()}"
+                    )
+                ] = res_idx
+            real_idx = [
+                trans[idx]
+                for idx in sorted(set(trans.keys()), key=standard_residue_sort)
+            ]
             seq = [seq[i] for i in real_idx]
-            seq = ''.join(seq)
-            oxt = len(u.atoms.select_atoms('name OXT')) == 1
+            seq = "".join(seq)
+            oxt = len(u.atoms.select_atoms("name OXT")) == 1
         else:
             seq = peptide_description
             oxt = True
-        
-        t_dict = ['Helical','Extended','Polyproline']
+        t_dict = ["Helical", "Extended", "Polyproline"]
         partials = []
         peptide_inits = []
         if self.conformation_partial is not None:
-            p_dict = {t_dict[idx]:int(_) for idx,_ in enumerate(self.conformation_partial.split(':'))}
+            p_dict = {
+                t_dict[idx]: int(_)
+                for idx, _ in enumerate(self.conformation_partial.split(":"))
+            }
             for t in p_dict:
                 assert p_dict[t] >= 0
                 if p_dict[t] != 0:
-                    structure = PeptideBuilder.make_structure(seq,phi=[Dihedral_angle[t][0]]*(len(seq)-1),psi_im1=[Dihedral_angle[t][1]]*(len(seq)-1))
+                    structure = PeptideBuilder.make_structure(
+                        seq,
+                        phi=[Dihedral_angle[t][0]] * (len(seq) - 1),
+                        psi_im1=[Dihedral_angle[t][1]] * (len(seq) - 1),
+                    )
                     out = Bio.PDB.PDBIO()
                     out.set_structure(structure)
-                    peptide_init = os.path.join(f"{self.output_dir}/{name}",f'{name}_peptide_{t}.pdb')
+                    peptide_init = os.path.join(
+                        f"{self.output_dir}/{name}", f"{name}_peptide_{t}.pdb"
+                    )
                     out.save(peptide_init)
                     peptide_inits.append(peptide_init)
                     partials.append(p_dict[t])
         else:
-            t = {'H':'Helical','E':'Extended','P':'Polyproline'}[self.conformation_type]
-            structure = PeptideBuilder.make_structure(seq,phi=[Dihedral_angle[t][0]]*(len(seq)-1),psi_im1=[Dihedral_angle[t][1]]*(len(seq)-1))
+            t = {"H": "Helical", "E": "Extended", "P": "Polyproline"}[
+                self.conformation_type
+            ]
+            to_construct = re.sub(r"\[([A-Za-z0-9_]+)\]", "?", seq)
+            print("building peptide init for", to_construct)
+            structure = PeptideBuilder.make_structure(
+                to_construct,
+                phi=[Dihedral_angle[t][0]] * (len(seq) - 1),
+                psi_im1=[Dihedral_angle[t][1]] * (len(seq) - 1),
+            )
             out = Bio.PDB.PDBIO()
             out.set_structure(structure)
-            peptide_init = os.path.join(f"{self.output_dir}/{name}",f'{name}_peptide_{t}.pdb')
+            peptide_init = os.path.join(
+                f"{self.output_dir}/{name}", f"{name}_peptide_{t}.pdb"
+            )
             out.save(peptide_init)
+            align_residues_by_backbone(peptide_init, peptide_description, peptide_init)
             peptide_inits.append(peptide_init)
             partials.append(1)
-        
-        noh_mda_pep, ori_coords_pep, coords_pep, lm_embeddings_pep, seq_pep, all_edge_index_pep, backbone_edge_index_pep,sidechain_edge_index_pep, atom2res_index, atom2resid_index, atom2atomid_index, pep_a_s = get_ori_peptide_feature_mda(peptide_inits[0], match= False, lm_embedding_chains=lm_embedding_pep)
+
+        (
+            noh_mda_pep,
+            ori_coords_pep,
+            coords_pep,
+            lm_embeddings_pep,
+            seq_pep,
+            all_edge_index_pep,
+            backbone_edge_index_pep,
+            sidechain_edge_index_pep,
+            atom2res_index,
+            atom2resid_index,
+            atom2atomid_index,
+            pep_a_s,
+        ) = get_ori_peptide_feature_mda(
+            peptide_inits[0], match=False, lm_embedding_chains=lm_embedding_pep
+        )
         try:
-            os.remove(os.path.join(f"{self.output_dir}/{name}",'peptide_noh.pdb'))
-        except:pass
-        
+            os.remove(os.path.join(f"{self.output_dir}/{name}", "peptide_noh.pdb"))
+        except:
+            pass
+
         # build the pytorch geometric heterogeneous graph
         complex_graph = HeteroData()
-        complex_graph['name'] = name
-        complex_graph['pep_a'].pos = coords_pep.to(dtype=torch.float)
-        complex_graph['pep_a'].orig_pos = ori_coords_pep.to(dtype=torch.float)
-        complex_graph['pep_a'].atom2res_index = torch.tensor(atom2res_index)
-        complex_graph['pep_a'].atom2resid_index = torch.tensor(atom2resid_index)
-        complex_graph['pep_a'].atom2atomid_index = torch.tensor(atom2atomid_index)
-        complex_graph['pep_a'].x = pep_a_s.to(torch.int64)
-        complex_graph['pep_a','pep_a'].edge_index = all_edge_index_pep
-        complex_graph['pep_a','pep_a'].backbone_edge_index = backbone_edge_index_pep
-        complex_graph['pep_a','pep_a'].sidechain_edge_index = sidechain_edge_index_pep
+        complex_graph["name"] = name
+        complex_graph["pep_a"].pos = coords_pep.to(dtype=torch.float)
+        complex_graph["pep_a"].orig_pos = ori_coords_pep.to(dtype=torch.float)
+        complex_graph["pep_a"].atom2res_index = torch.tensor(atom2res_index)
+        complex_graph["pep_a"].atom2resid_index = torch.tensor(atom2resid_index)
+        complex_graph["pep_a"].atom2atomid_index = torch.tensor(atom2atomid_index)
+        complex_graph["pep_a"].x = pep_a_s.to(torch.int64)
+        complex_graph["pep_a", "pep_a"].edge_index = all_edge_index_pep
+        complex_graph["pep_a", "pep_a"].backbone_edge_index = backbone_edge_index_pep
+        complex_graph["pep_a", "pep_a"].sidechain_edge_index = sidechain_edge_index_pep
 
         G = to_networkx(complex_graph.to_homogeneous(), to_undirected=False)
-        edges = complex_graph['pep_a','pep_a'].edge_index.T.numpy()
-        backbone_edges = complex_graph['pep_a','pep_a'].backbone_edge_index.T.tolist()
-        sidechain_edges = complex_graph['pep_a','pep_a'].sidechain_edge_index.T.tolist()
+        edges = complex_graph["pep_a", "pep_a"].edge_index.T.numpy()
+        backbone_edges = complex_graph["pep_a", "pep_a"].backbone_edge_index.T.tolist()
+        sidechain_edges = complex_graph[
+            "pep_a", "pep_a"
+        ].sidechain_edge_index.T.tolist()
         ## sidechain
         to_rotate_sidechain = []
         for i in range(0, edges.shape[0], 2):
-            assert edges[i, 0] == edges[i+1, 1]
+            assert edges[i, 0] == edges[i + 1, 1]
             G2 = G.to_undirected()
             G2.remove_edge(*edges[i])
             if not nx.is_connected(G2) and edges[i].tolist() in sidechain_edges:
@@ -265,18 +505,24 @@ class InferenceDataset(Dataset):
                     continue
             to_rotate_sidechain.append([])
             to_rotate_sidechain.append([])
-        mask_edges_sidechain = np.asarray([0 if len(l) == 0 else 1 for l in to_rotate_sidechain], dtype=bool)
-        mask_rotate_sidechain = np.zeros((np.sum(mask_edges_sidechain), len(G.nodes())), dtype=bool)
+        mask_edges_sidechain = np.asarray(
+            [0 if len(l) == 0 else 1 for l in to_rotate_sidechain], dtype=bool
+        )
+        mask_rotate_sidechain = np.zeros(
+            (np.sum(mask_edges_sidechain), len(G.nodes())), dtype=bool
+        )
         idx = 0
         for i in range(len(G.edges())):
             if mask_edges_sidechain[i]:
-                mask_rotate_sidechain[idx][np.asarray(to_rotate_sidechain[i], dtype=int)] = True
+                mask_rotate_sidechain[idx][
+                    np.asarray(to_rotate_sidechain[i], dtype=int)
+                ] = True
                 idx += 1
-                
+
         ## backbone
         to_rotate_backbone = []
         for i in range(0, edges.shape[0], 2):
-            assert edges[i, 0] == edges[i+1, 1]
+            assert edges[i, 0] == edges[i + 1, 1]
 
             G2 = G.to_undirected()
             G2.remove_edge(*edges[i])
@@ -292,37 +538,66 @@ class InferenceDataset(Dataset):
                     continue
             to_rotate_backbone.append([])
             to_rotate_backbone.append([])
-        mask_edges_backbone = np.asarray([0 if len(l) == 0 else 1 for l in to_rotate_backbone], dtype=bool)
-        mask_rotate_backbone = np.zeros((np.sum(mask_edges_backbone), len(G.nodes())), dtype=bool)
+        mask_edges_backbone = np.asarray(
+            [0 if len(l) == 0 else 1 for l in to_rotate_backbone], dtype=bool
+        )
+        mask_rotate_backbone = np.zeros(
+            (np.sum(mask_edges_backbone), len(G.nodes())), dtype=bool
+        )
         idx = 0
         for i in range(len(G.edges())):
             if mask_edges_backbone[i]:
-                mask_rotate_backbone[idx][np.asarray(to_rotate_backbone[i], dtype=int)] = True
+                mask_rotate_backbone[idx][
+                    np.asarray(to_rotate_backbone[i], dtype=int)
+                ] = True
                 idx += 1
-                
-        complex_graph['pep_a'].mask_edges_sidechain = torch.from_numpy(mask_edges_sidechain)
-        complex_graph['pep_a'].mask_rotate_sidechain = mask_rotate_sidechain
-        complex_graph['pep_a'].mask_edges_backbone = torch.from_numpy(mask_edges_backbone)
-        complex_graph['pep_a'].mask_rotate_backbone = mask_rotate_backbone
+
+        complex_graph["pep_a"].mask_edges_sidechain = torch.from_numpy(
+            mask_edges_sidechain
+        )
+        complex_graph["pep_a"].mask_rotate_sidechain = mask_rotate_sidechain
+        complex_graph["pep_a"].mask_edges_backbone = torch.from_numpy(
+            mask_edges_backbone
+        )
+        complex_graph["pep_a"].mask_rotate_backbone = mask_rotate_backbone
         num_residues = len(c_alpha_coords_rec)
         if num_residues <= 1:
             raise ValueError(f"rec contains only 1 residue!")
-        
-        complex_graph['receptor'].x = torch.cat([seq_rec.reshape([-1,1]),node_s_rec, torch.tensor(lm_embeddings_rec)], axis=1) if lm_embeddings_rec is not None else torch.cat([seq_rec.reshape([-1,1]),node_s_rec], axis=1) # [num_res, 1+9+1280]
-        complex_graph['receptor'].pos = c_alpha_coords_rec.to(dtype=torch.float)
-        complex_graph['receptor'].tips = tip_coords_rec.to(dtype=torch.float)
-        complex_graph['receptor'].node_v = node_v_rec.to(dtype=torch.float)
-        complex_graph['receptor', 'rec_contact', 'receptor'].edge_index = edge_index_rec
-        complex_graph['receptor', 'rec_contact', 'receptor'].edge_s = edge_s_rec.to(dtype=torch.float)
-        complex_graph['receptor', 'rec_contact', 'receptor'].edge_v = edge_v_rec.to(dtype=torch.float)
-        complex_graph['pep'].x = torch.cat([seq_pep.reshape([-1,1]), torch.tensor(lm_embeddings_pep)], axis=1) if lm_embeddings_pep is not None else seq_pep.reshape([-1,1])
-        complex_graph['pep'].noh_mda = noh_mda_pep
-        protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True).to(dtype=torch.float)
-        complex_graph['receptor'].pos -= protein_center
-        complex_graph['receptor'].tips -= protein_center
-        complex_graph['pep_a'].pos -= protein_center
+
+        complex_graph["receptor"].x = (
+            torch.cat(
+                [seq_rec.reshape([-1, 1]), node_s_rec, torch.tensor(lm_embeddings_rec)],
+                axis=1,
+            )
+            if lm_embeddings_rec is not None
+            else torch.cat([seq_rec.reshape([-1, 1]), node_s_rec], axis=1)
+        )  # [num_res, 1+9+1280]
+        complex_graph["receptor"].pos = c_alpha_coords_rec.to(dtype=torch.float)
+        complex_graph["receptor"].tips = tip_coords_rec.to(dtype=torch.float)
+        complex_graph["receptor"].node_v = node_v_rec.to(dtype=torch.float)
+        complex_graph["receptor", "rec_contact", "receptor"].edge_index = edge_index_rec
+        complex_graph["receptor", "rec_contact", "receptor"].edge_s = edge_s_rec.to(
+            dtype=torch.float
+        )
+        complex_graph["receptor", "rec_contact", "receptor"].edge_v = edge_v_rec.to(
+            dtype=torch.float
+        )
+        complex_graph["pep"].x = (
+            torch.cat(
+                [seq_pep.reshape([-1, 1]), torch.tensor(lm_embeddings_pep)], axis=1
+            )
+            if lm_embeddings_pep is not None
+            else seq_pep.reshape([-1, 1])
+        )
+        complex_graph["pep"].noh_mda = noh_mda_pep
+        protein_center = torch.mean(
+            complex_graph["receptor"].pos, dim=0, keepdim=True
+        ).to(dtype=torch.float)
+        complex_graph["receptor"].pos -= protein_center
+        complex_graph["receptor"].tips -= protein_center
+        complex_graph["pep_a"].pos -= protein_center
         complex_graph.original_center = protein_center
-        complex_graph['success'] = True
-        complex_graph['partials'] = partials
-        complex_graph['peptide_inits'] = peptide_inits
+        complex_graph["success"] = True
+        complex_graph["partials"] = partials
+        complex_graph["peptide_inits"] = peptide_inits
         return complex_graph

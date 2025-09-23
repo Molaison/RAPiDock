@@ -281,7 +281,8 @@ def safe_index(l, e):
 
 def lig_atom_featurizer(pep_noh):
     # mol = read_mols('.',pep_noh, remove_hs=False,sanitize=True)
-    mol = read_pdb_with_seq(pep_noh)
+    mol = read_pdb_with_seq(pep_noh,sanitize=False)
+    Chem.GetSymmSSSR(mol) # trigger ring info computation
     ringinfo = mol.GetRingInfo()
     atom_features_list = []
     for idx, atom in enumerate(mol.GetAtoms()):
@@ -310,7 +311,7 @@ def lig_atom_featurizer(pep_noh):
 
 def get_chiralcenters(pep_noh):
     # mol = read_mols('.',pep_noh, remove_hs=False,sanitize=True)
-    mol = read_pdb_with_seq(pep_noh)
+    mol = read_pdb_with_seq(pep_noh,sanitize=False)
     try:
         chiralcenters = Chem.FindMolChiralCenters(mol,force=True,includeUnassigned=True, useLegacyImplementation=False)
     except:
